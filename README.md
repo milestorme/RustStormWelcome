@@ -113,4 +113,4 @@ A premium welcome UI plugin for Rust servers featuring a branded popup, dynamic 
 
 ## 👑 Credits
 
-Built for **RustStorm**
+Milestorme
