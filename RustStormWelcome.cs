@@ -6,8 +6,8 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("RustStormWelcome", "Milestorme", "1.8.0")]
-    [Description("Shows a premium branded welcome popup on join and provides /info to reopen it.")]
+    [Info("RustStormWelcome", "Milestorme", "1.9.0")]
+    [Description("Shows a branded welcome popup on join and provides /info to reopen it.")]
     public class RustStormWelcome : RustPlugin
     {
         private const string UI = "RSW_UI";
@@ -35,7 +35,7 @@ namespace Oxide.Plugins
         };
 
         private Configuration config;
-        private readonly Dictionary<ulong, Timer> uiRefreshTimers = new Dictionary<ulong, Timer>();
+        private readonly Dictionary<ulong, Timer> uiCloseTimers = new Dictionary<ulong, Timer>();
 
         public class Configuration
         {
@@ -95,6 +95,31 @@ namespace Oxide.Plugins
             public string ButtonTextColor = "1.00 1.00 1.00 1.00";
             public string AnchorMin = "0.04 0.06";
             public string AnchorMax = "0.96 0.96";
+        }
+
+        private void Init()
+        {
+            lang.RegisterMessages(new Dictionary<string, string>
+            {
+                ["ChatReminderWelcome"] = "<color=#F25814>{0}</color>",
+                ["ChatReminderDiscord"] = "<color=#A772FF>Discord:</color> <color=#FFFFFF>{0}</color>",
+                ["ChatReminderNextWipe"] = "<color=#BFD7FF>Next wipe:</color> <color=#FFFFFF>{0}</color>",
+                ["ChatReminderInfo"] = "<color=#BFD7FF>Type <color=#FFFFFF>/info</color> to reopen this panel any time.</color>",
+
+                ["SectionServerInfo"] = "SERVER INFO",
+                ["SectionRules"] = "RULES",
+                ["SectionCommands"] = "COMMANDS",
+
+                ["ServerTypeLabel"] = "Server Type",
+                ["WipeScheduleLabel"] = "Wipe Schedule",
+                ["NextWipeLabel"] = "Next Wipe",
+                ["RatesLabel"] = "Rates",
+
+                ["HintText"] = "Type /info any time to open this panel again",
+                ["CloseButton"] = "CLOSE",
+                ["CountdownUnavailable"] = "Unavailable",
+                ["CountdownWipingNow"] = "Wiping now"
+            }, this);
         }
 
         protected override void LoadDefaultConfig()
@@ -162,6 +187,9 @@ namespace Oxide.Plugins
             if (config.UI == null)
                 config.UI = new UISettings();
 
+            config.WelcomeDelaySeconds = Mathf.Max(0f, config.WelcomeDelaySeconds);
+            config.PopupDurationSeconds = Mathf.Max(0f, config.PopupDurationSeconds);
+
             config.ServerInfo.Commands = DeduplicateList(config.ServerInfo.Commands, DefaultCommands);
             config.Rules.SummaryLines = DeduplicateList(config.Rules.SummaryLines, DefaultRules);
 
@@ -173,6 +201,18 @@ namespace Oxide.Plugins
 
             if (string.IsNullOrWhiteSpace(config.BannerUrl))
                 config.BannerUrl = "https://i.ibb.co/9HGbDcWT/Chat-GPT-Image-Mar-31-2026-08-24-03-PM.png";
+
+            if (string.IsNullOrWhiteSpace(config.ServerInfo.WelcomeLine))
+                config.ServerInfo.WelcomeLine = "Welcome to RustStorm";
+
+            if (string.IsNullOrWhiteSpace(config.ServerInfo.ServerType))
+                config.ServerInfo.ServerType = "5x | Solo/Duo/Trio";
+
+            if (string.IsNullOrWhiteSpace(config.ServerInfo.WipeSchedule))
+                config.ServerInfo.WipeSchedule = "Map wipes every Friday 3:00 AM GMT+8";
+
+            if (string.IsNullOrWhiteSpace(config.ServerInfo.Rates))
+                config.ServerInfo.Rates = "5x gather with BetterLoot";
 
             if (string.IsNullOrWhiteSpace(config.WipeTimer.TimeZoneId))
                 config.WipeTimer.TimeZoneId = "Asia/Singapore";
@@ -206,6 +246,12 @@ namespace Oxide.Plugins
             return result;
         }
 
+        private string GetMsg(string key, string playerId = null, params object[] args)
+        {
+            string message = lang.GetMessage(key, this, playerId);
+            return args != null && args.Length > 0 ? string.Format(message, args) : message;
+        }
+
         private void OnPlayerConnected(BasePlayer player)
         {
             if (player == null || !player.IsConnected)
@@ -224,6 +270,15 @@ namespace Oxide.Plugins
             });
         }
 
+        private void OnPlayerDisconnected(BasePlayer player, string reason)
+        {
+            if (player == null)
+                return;
+
+            DestroyUi(player);
+            StopCloseTimer(player.userID);
+        }
+
         [ChatCommand("info")]
         private void CmdInfo(BasePlayer player, string cmd, string[] args)
         {
@@ -240,57 +295,73 @@ namespace Oxide.Plugins
             if (player == null)
                 return;
 
-            StopUiRefresh(player.userID);
-            CuiHelper.DestroyUi(player, UI);
+            DestroyUi(player);
+            StopCloseTimer(player.userID);
         }
 
+        private void StartCloseTimer(BasePlayer player)
+        {
+            if (player == null || config.PopupDurationSeconds <= 0f)
+                return;
 
-        private void StartUiRefresh(BasePlayer player)
+            StopCloseTimer(player.userID);
+
+            uiCloseTimers[player.userID] = timer.Once(config.PopupDurationSeconds, () =>
+            {
+                if (player == null || !player.IsConnected)
+                {
+                    StopCloseTimer(player != null ? player.userID : 0UL);
+                    return;
+                }
+
+                DestroyUi(player);
+                StopCloseTimer(player.userID);
+            });
+        }
+
+        private void StopCloseTimer(ulong userId)
+        {
+            if (userId == 0UL)
+                return;
+
+            Timer existing;
+            if (uiCloseTimers.TryGetValue(userId, out existing))
+            {
+                existing?.Destroy();
+                uiCloseTimers.Remove(userId);
+            }
+        }
+
+        private void DestroyUi(BasePlayer player)
         {
             if (player == null)
                 return;
 
-            StopUiRefresh(player.userID);
-
-            uiRefreshTimers[player.userID] = timer.Every(30f, () =>
-            {
-                if (player == null || !player.IsConnected)
-                {
-                    StopUiRefresh(player != null ? player.userID : 0UL);
-                    return;
-                }
-
-                ShowUI(player, false);
-            });
-        }
-
-        private void StopUiRefresh(ulong userId)
-        {
-            Timer existing;
-            if (userId == 0UL)
-                return;
-
-            if (uiRefreshTimers.TryGetValue(userId, out existing))
-            {
-                existing?.Destroy();
-                uiRefreshTimers.Remove(userId);
-            }
+            CuiHelper.DestroyUi(player, UI);
         }
 
         private void SendChatReminder(BasePlayer player)
         {
-            player.ChatMessage($"<color=#F25814>{config.ServerInfo.WelcomeLine}</color>");
-            player.ChatMessage($"<color=#A772FF>Discord:</color> <color=#FFFFFF>{config.DiscordLink}</color>");
+            string playerId = player?.UserIDString;
+
+            player.ChatMessage(GetMsg("ChatReminderWelcome", playerId, config.ServerInfo.WelcomeLine));
+            player.ChatMessage(GetMsg("ChatReminderDiscord", playerId, config.DiscordLink));
 
             if (config.WipeTimer.EnableDynamicWipeTimer)
-                player.ChatMessage($"<color=#BFD7FF>Next wipe:</color> <color=#FFFFFF>{GetNextWipeCountdownText()}</color>");
+                player.ChatMessage(GetMsg("ChatReminderNextWipe", playerId, GetNextWipeCountdownText(playerId)));
 
-            player.ChatMessage("<color=#BFD7FF>Type <color=#FFFFFF>/info</color> to reopen this panel any time.</color>");
+            player.ChatMessage(GetMsg("ChatReminderInfo", playerId));
         }
 
-        private void ShowUI(BasePlayer player, bool restartRefresh = true)
+        private void ShowUI(BasePlayer player)
         {
-            CuiHelper.DestroyUi(player, UI);
+            if (player == null || !player.IsConnected)
+                return;
+
+            string playerId = player.UserIDString;
+
+            DestroyUi(player);
+            StopCloseTimer(player.userID);
 
             var c = new CuiElementContainer();
 
@@ -345,7 +416,7 @@ namespace Oxide.Plugins
 
             c.Add(new CuiLabel
             {
-                Text = { Text = config.ServerName.ToUpper(), FontSize = 30, Align = TextAnchor.MiddleCenter, Color = config.UI.TitleColor },
+                Text = { Text = config.ServerName.ToUpperInvariant(), FontSize = 30, Align = TextAnchor.MiddleCenter, Color = config.UI.TitleColor },
                 RectTransform = { AnchorMin = "0.24 0.69", AnchorMax = "0.76 0.76" }
             }, UI + ".panel", UI + ".panel.title");
 
@@ -361,13 +432,13 @@ namespace Oxide.Plugins
                 RectTransform = { AnchorMin = "0.22 0.625", AnchorMax = "0.78 0.629" }
             }, UI + ".panel", UI + ".panel.divider");
 
-            AddSection(c, UI + ".panel", "SERVER INFO", BuildServerInfoText(), "0.05 0.40", "0.45 0.61");
-            AddSection(c, UI + ".panel", "RULES", BuildRulesText(), "0.05 0.20", "0.45 0.38");
-            AddSection(c, UI + ".panel", "COMMANDS", BuildCommandsText(), "0.55 0.20", "0.95 0.61");
+            AddSection(c, UI + ".panel", GetMsg("SectionServerInfo", playerId), BuildServerInfoText(playerId), "0.05 0.40", "0.45 0.61");
+            AddSection(c, UI + ".panel", GetMsg("SectionRules", playerId), BuildRulesText(), "0.05 0.20", "0.45 0.38");
+            AddSection(c, UI + ".panel", GetMsg("SectionCommands", playerId), BuildCommandsText(), "0.55 0.20", "0.95 0.61");
 
             c.Add(new CuiLabel
             {
-                Text = { Text = "Type /info any time to open this panel again", FontSize = 14, Align = TextAnchor.MiddleCenter, Color = config.UI.MutedTextColor },
+                Text = { Text = GetMsg("HintText", playerId), FontSize = 14, Align = TextAnchor.MiddleCenter, Color = config.UI.MutedTextColor },
                 RectTransform = { AnchorMin = "0.22 0.11", AnchorMax = "0.78 0.15" }
             }, UI + ".panel", UI + ".panel.hint");
 
@@ -375,25 +446,11 @@ namespace Oxide.Plugins
             {
                 Button = { Color = config.UI.ButtonColor, Command = CLOSE, Close = UI },
                 RectTransform = { AnchorMin = "0.40 0.05", AnchorMax = "0.60 0.10" },
-                Text = { Text = "CLOSE", FontSize = 18, Align = TextAnchor.MiddleCenter, Color = config.UI.ButtonTextColor }
+                Text = { Text = GetMsg("CloseButton", playerId), FontSize = 18, Align = TextAnchor.MiddleCenter, Color = config.UI.ButtonTextColor }
             }, UI + ".panel", UI + ".panel.close");
 
             CuiHelper.AddUi(player, c);
-
-            if (restartRefresh)
-                StartUiRefresh(player);
-
-            if (config.PopupDurationSeconds > 0f)
-            {
-                timer.Once(config.PopupDurationSeconds, () =>
-                {
-                    if (player != null && player.IsConnected)
-                    {
-                        StopUiRefresh(player.userID);
-                        CuiHelper.DestroyUi(player, UI);
-                    }
-                });
-            }
+            StartCloseTimer(player);
         }
 
         private void AddSection(CuiElementContainer c, string parent, string title, string body, string min, string max)
@@ -425,16 +482,16 @@ namespace Oxide.Plugins
             }, panel, panel + ".body");
         }
 
-        private string BuildServerInfoText()
+        private string BuildServerInfoText(string playerId)
         {
             var sb = new StringBuilder();
-            sb.Append("• Server Type: ").AppendLine(config.ServerInfo.ServerType);
-            sb.Append("• Wipe Schedule: ").AppendLine(config.ServerInfo.WipeSchedule);
+            sb.Append("• ").Append(GetMsg("ServerTypeLabel", playerId)).Append(": ").AppendLine(config.ServerInfo.ServerType);
+            sb.Append("• ").Append(GetMsg("WipeScheduleLabel", playerId)).Append(": ").AppendLine(config.ServerInfo.WipeSchedule);
 
             if (config.WipeTimer.EnableDynamicWipeTimer)
-                sb.Append("• Next Wipe: ").AppendLine(GetNextWipeCountdownText());
+                sb.Append("• ").Append(GetMsg("NextWipeLabel", playerId)).Append(": ").AppendLine(GetNextWipeCountdownText(playerId));
 
-            sb.Append("• Rates: ").AppendLine(config.ServerInfo.Rates);
+            sb.Append("• ").Append(GetMsg("RatesLabel", playerId)).Append(": ").AppendLine(config.ServerInfo.Rates);
             return sb.ToString().TrimEnd();
         }
 
@@ -454,19 +511,19 @@ namespace Oxide.Plugins
             return sb.ToString().TrimEnd();
         }
 
-        private string GetNextWipeCountdownText()
+        private string GetNextWipeCountdownText(string playerId = null)
         {
             DateTime nextWipeLocal;
             TimeZoneInfo tz;
 
             if (!TryGetNextWipeLocalTime(out nextWipeLocal, out tz))
-                return "Unavailable";
+                return GetMsg("CountdownUnavailable", playerId);
 
             DateTime nextWipeUtc = TimeZoneInfo.ConvertTimeToUtc(nextWipeLocal, tz);
             TimeSpan remaining = nextWipeUtc - DateTime.UtcNow;
 
             if (remaining.TotalSeconds <= 0)
-                return "Wiping now";
+                return GetMsg("CountdownWipingNow", playerId);
 
             return FormatTimeRemaining(remaining);
         }
@@ -511,24 +568,28 @@ namespace Oxide.Plugins
 
         private string FormatTimeRemaining(TimeSpan span)
         {
+            int totalDays = Mathf.Max(0, span.Days);
+            int hours = Mathf.Max(0, span.Hours);
+            int minutes = Mathf.Max(0, span.Minutes);
+
             if (span.TotalDays >= 1)
-                return string.Format("{0}d {1}h {2}m", Mathf.Max(0, span.Days), Mathf.Max(0, span.Hours), Mathf.Max(0, span.Minutes));
+                return string.Format("{0}d {1}h {2}m", totalDays, hours, minutes);
 
             if (span.TotalHours >= 1)
-                return string.Format("{0}h {1}m", Mathf.Max(0, span.Hours), Mathf.Max(0, span.Minutes));
+                return string.Format("{0}h {1}m", hours, minutes);
 
-            return string.Format("{0}m", Mathf.Max(0, span.Minutes));
+            return string.Format("{0}m", minutes);
         }
 
         private void Unload()
         {
-            foreach (Timer refreshTimer in uiRefreshTimers.Values)
-                refreshTimer?.Destroy();
+            foreach (Timer closeTimer in uiCloseTimers.Values)
+                closeTimer?.Destroy();
 
-            uiRefreshTimers.Clear();
+            uiCloseTimers.Clear();
 
             foreach (BasePlayer player in BasePlayer.activePlayerList)
-                CuiHelper.DestroyUi(player, UI);
+                DestroyUi(player);
         }
     }
 }
