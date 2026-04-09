@@ -489,7 +489,7 @@ namespace Oxide.Plugins
             sb.Append("• ").Append(GetMsg("WipeScheduleLabel", playerId)).Append(": ").AppendLine(config.ServerInfo.WipeSchedule);
 
             if (config.WipeTimer.EnableDynamicWipeTimer)
-                sb.Append("• ").Append(GetMsg("NextWipeLabel", playerId)).Append(": ").AppendLine(GetNextWipeCountdownText(playerId));
+                sb.Append("• ").Append(GetMsg("NextWipeLabel", playerId)).Append(": ").Append("<color=#F25814>").AppendLine(GetNextWipeCountdownText(playerId)).Append("</color>");
 
             sb.Append("• ").Append(GetMsg("RatesLabel", playerId)).Append(": ").AppendLine(config.ServerInfo.Rates);
             return sb.ToString().TrimEnd();
